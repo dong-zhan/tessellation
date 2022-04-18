@@ -21,9 +21,6 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 	CVector2 lastVertices[4][2];
 	int lastVerticesCnt[4];
 
-	CVector2* band0 = output0;
-	CVector2* band1 = output1;
-
 	CVector2 corners[4] = {
 		CVector2(0,0),
 		CVector2(1,0),
@@ -32,6 +29,9 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 	};
 
 	for (int side = 0; side < 4; side++) {
+		CVector2* band0 = output0;
+		CVector2* band1 = output1;
+
 		int side1 = side + 1;
 		if (side1 == 4)side1 = 0;
 
