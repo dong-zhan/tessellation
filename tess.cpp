@@ -1,3 +1,70 @@
+//	about tessellation cracks.
+// 1, for strange(odd with fractions) tess factor, it should be impossible(not necessary to avoid all cracks)
+// 2, only for closeup images, make sure tess factor for those are power_of_2 -> then bary-centric coords are like 0.25, 0.5, etc -> 
+//			no cracks.
+// 3, actually, even this, vertex precision can still cause cracks. so, make sure, vertices are rounded up to like 4 decimal points.
+//		seems this is not correct too, because 4.f/5.f = 0.8000000000012  --> so, this value is not dependable.
+
+
+// https://www.khronos.org/opengl/wiki/Tessellation
+// think trapezoid, generate a triangle mesh for trapezoid. -- edge pairs
+// tessellation geometry generation is band generation.
+// Outer Tess: how man segs on each edge
+// Inner Tess: how man edges on one direction.
+// in barycentric: think of triangles as the same thing as quad, except triangles have 3 vertices.
+
+
+#include "stdafx.h"
+
+#include "DirectXPackedVector.h"
+#include "DirectXPackedVector.inl"
+
+#include "math/mymath_api.h"
+
+#include "math/sh.h"
+
+#include "dx11/dx11texture2d.h"
+#include "mesh/mesh_tools.h"
+
+#include "win32/dirtree.h"
+#include "helper/wavefront.h"
+
+#include "mesh/mesh_grid.h"
+#include "mesh/mesh_tools.h"
+
+#include "mesh/tessellation.h"
+
+#include "common/common_globals.h"
+
+#include "ray_tracing.h"
+#include "ge_util/string_array.h"
+
+#include "helper/xml.h"
+
+#include "directxmath.h"
+
+#include "dx11/dx11shaderresourceview.h"	
+
+#include "app11/app11image_process.h"
+
+#include "physics/physics.h"
+#include "math/probability.h"
+#include "math/mathlib.h"
+#include "math/mymath_api.h"
+#include "physics/physics_globals.h"
+
+#include "math/math_intersect.h"
+
+#include <random>
+
+using namespace GE_UTIL;
+using namespace GE_MESH;
+using namespace DirectX;
+using namespace GE_MATH;
+using namespace GE_PHYSICS;
+
+extern wchar_t* xy2dir(int x, int y);
+
 template<class T>
 void subdivide_edge(T& v0, T& v1, int L, T* output)
 {
@@ -10,7 +77,8 @@ void subdivide_edge(T& v0, T& v1, int L, T* output)
 
 //OL: outer edge tess factor
 //IL: inner edge tess factor
-void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTriangle)(CVector2& v1, CVector2& v2, CVector2& v3))
+//emitted triangle coordinates are in UV domain.	ref: emitTriangle
+void tessellation_quad_edge_integer(void* quad_patch, int OL[4], int IL[2], bool CW, void(*emitTriangle)(void* quad_patch, CVector2& v1, CVector2& v2, CVector2& v3))
 {
 	//64 is maximum
 	CVector2 output0[64];
@@ -18,7 +86,7 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 
 	int IIL[4] = { IL[0], IL[1], IL[0], IL[1] };
 
-	CVector2 lastVertices[4][2];
+	CVector2 lastVertices[4][64];
 	int lastVerticesCnt[4];
 
 	CVector2 corners[4] = {
@@ -56,30 +124,80 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 
 			int idx = 0;
 			
+			float oppCoord;
+			bool bbreak = false;
+			bool bcopy = false;
 
 			switch (side) {
-			case 0:
+			case 0: //left to right	(bottom side)
+				oppCoord = (float)(loop + 1) / foppL;
+				if (oppCoord > 0.5) {
+					bbreak = true;
+					break;
+				}
 				for (int j = 1 + loop; j <= vertexCnt + loop; j++) {
-					band1[idx++].set((float)j / fL, (float)(loop + 1) / foppL);
+					band1[idx++].set((float)j / fL, oppCoord);
+				}
+				oppCoord = (float)(loop + 3) / foppL;
+				if (oppCoord > 0.5) {
+					bcopy = true;
+					break;
 				}
 				break;
-			case 1:
+			case 1:  //bottom to top  (right side)
+				oppCoord = (float)(oppL - loop - 1) / foppL;
+				if (oppCoord < 0.5) {
+					bbreak = true;
+					break;
+				}
 				for (int j = 1 + loop; j <= vertexCnt + loop; j++) {
-					band1[idx++].set((float)(oppL - loop - 1) / foppL, (float)j / fL);
+					band1[idx++].set(oppCoord, (float)j / fL);
+				}
+				oppCoord = (float)(oppL - loop - 3) / foppL;
+				if (oppCoord < 0.5) {
+					bcopy = true;
 				}
 				break;
-			case 2:
+			case 2:  //right to left	(top side)
+				oppCoord = (float)(oppL - loop - 1) / foppL;
+				if (oppCoord < 0.5) {
+					bbreak = true;
+					break;
+				}
 				for (int j = vertexCnt + loop; j > loop; j--) {
-					band1[idx++].set((float)(j) / fL, (float)(oppL - loop - 1) / foppL);
+					band1[idx++].set((float)(j) / fL, oppCoord);
+				}
+				oppCoord = (float)(oppL - loop - 3) / foppL;
+				if (oppCoord < 0.5) {
+					bcopy = true;
 				}
 				break;
-			case 3:
+			case 3: // top to bottom	(left side)
+				oppCoord = (float)(loop + 1) / foppL;
+				if (oppCoord > 0.5) {
+					bbreak = true;
+					break;
+				}
 				for (int j = vertexCnt + loop; j > loop; j--) {
-					band1[idx++].set((float)(loop + 1) / foppL, (float)(j) / fL);
+					band1[idx++].set(oppCoord, (float)(j) / fL);
+				}
+				oppCoord = (float)(loop + 3) / foppL;
+				if (oppCoord > 0.5) {
+					bcopy = true;
 				}
 				break;
 			}
 
+			if (bcopy) {
+				lastVerticesCnt[side] = vertexCnt;
+				for (int i = 0; i < vertexCnt; i++) {
+					lastVertices[side][i] = band1[i];
+				}
+			}
+
+			if (bbreak) {
+				break;
+			}
 			//
 			// generate primitives: idea: avoid thin triangles.
 			//
@@ -142,7 +260,7 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 					// insert triangle
 					if (order) {
 						//two vertices on short, short edge must be outer edge
-						emitTriangle(pShort[shortIdx], pShort[shortIdx + 1], pLong[i]);
+						emitTriangle(quad_patch, pShort[shortIdx], pShort[shortIdx + 1], pLong[i]);
 
 #if 0
 						ODS("S(%d), ", shortIdx);
@@ -152,13 +270,13 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 #endif
 					}
 					else {
-						emitTriangle(pShort[shortIdx], pLong[i], pShort[shortIdx + 1]);
+						emitTriangle(quad_patch, pShort[shortIdx], pLong[i], pShort[shortIdx + 1]);
 					}
 
 					shortIdx++;
 				}
 				if (order) {
-					emitTriangle(pLong[i], pShort[shortIdx], pLong[i + 1]);
+					emitTriangle(quad_patch, pLong[i], pShort[shortIdx], pLong[i + 1]);
 #if 0
 					ODS("L(%d), ", i);
 					ODS("L(%d), ", i + 1);
@@ -167,16 +285,16 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 #endif
 				}
 				else {
-					emitTriangle(pLong[i], pLong[i + 1], pShort[shortIdx]);
+					emitTriangle(quad_patch, pLong[i], pLong[i + 1], pShort[shortIdx]);
 				}
 			}
 
 			if (shortIdx != cntShort - 1) {
 				if (order) {
-					emitTriangle(pShort[shortIdx], pShort[shortIdx + 1], pLong[nTris]);
+					emitTriangle(quad_patch, pShort[shortIdx], pShort[shortIdx + 1], pLong[nTris]);
 				}
 				else {
-					emitTriangle(pShort[shortIdx], pLong[nTris], pShort[shortIdx + 1]);
+					emitTriangle(quad_patch, pShort[shortIdx], pLong[nTris], pShort[shortIdx + 1]);
 				}
 #if 0
 				ODS("S(%d), ", shortIdx);
@@ -188,9 +306,9 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 
 
 			if (vertexCnt <= 2) {
-				lastVerticesCnt[0] = vertexCnt;
+				lastVerticesCnt[side] = vertexCnt;
 				for (int i = 0; i < vertexCnt; i++) {
-					lastVertices[0][i] = band1[i];
+					lastVertices[side][i] = band1[i];
 				}
 				break;
 			}
@@ -200,15 +318,51 @@ void tessellation_quad_edge_integer(int OL[4], int IL[2], bool CW, void(*emitTri
 		}
 	}
 
-	//
-	// maybe a missing geometry here, if so, reference tessellation_tri_edge_integer()
-	//
+	// only possible cases, two thin slices, either in x dir or y -> this means, only 2 components in one of those directions. 
+	// lastVertices[0] stores the bottom edge, 1 right edge, 2 top edge, 3 left edge
+	// edge 1234 forms a ring in CCW order, vertices in it are in this order too.
+	// corner points of this thin slice has two cooresponding vertices in those edges.
+	if (lastVerticesCnt[0] != 1) {
+		int longCnt;
+
+		CVector2* edges[4];
+
+		if (lastVerticesCnt[0] > lastVerticesCnt[1]) {
+			// slice longer in x direction
+			longCnt = lastVerticesCnt[0];
+			for (int i = 0; i < 4; i++) {
+				int j = i + 1;
+				if (j == 4)j = 0;
+				edges[i] = lastVertices[j];
+			}
+		}
+		else {
+			// slice longer in y direction
+			longCnt = lastVerticesCnt[1];
+			for (int i = 0; i < 4; i++) {
+				edges[i] = lastVertices[i];
+			}
+		}
+
+		for (int x = 0; x < longCnt - 1; x++) {	
+			if (CW) {
+				emitTriangle(quad_patch, edges[3][longCnt - x - 1], edges[1][x], edges[3][longCnt - x - 2]);
+				emitTriangle(quad_patch, edges[1][x], edges[1][x + 1], edges[3][longCnt - x - 2]);
+			}
+			else {
+				emitTriangle(quad_patch, edges[3][longCnt - x - 1], edges[3][longCnt - x - 2], edges[1][x]);
+				emitTriangle(quad_patch, edges[1][x], edges[3][longCnt - x - 2], edges[1][x + 1]);
+			}
+		}
+	}
 }
 
 
 //OL: outer edge tess factor
 //IL: inner edge tess factor
-void tessellation_tri_edge_integer(int OL[3], int IL, bool CW, void(*emitTriangle)(CVector4D<>& v1, CVector4D<>& v2, CVector4D<>& v3))
+//emitted triangle coordinates are in UV domain -> ref: emitTriangle4D
+void tessellation_tri_edge_integer(void* tri_patch, int OL[3], int IL, bool CW, 
+	void(*emitTriangle)(void* tri_patch, CVector4D<>& v1, CVector4D<>& v2, CVector4D<>& v3))
 {
 	//64 is maximum
 	CVector4D<> output0[64];
@@ -336,7 +490,7 @@ void tessellation_tri_edge_integer(int OL[3], int IL, bool CW, void(*emitTriangl
 					// insert triangle
 					if (order) {
 						//two vertices on short, short edge must be outer edge
-						emitTriangle(pShort[shortIdx], pLong[i], pShort[shortIdx + 1]);
+						emitTriangle(tri_patch, pShort[shortIdx], pLong[i], pShort[shortIdx + 1]);
 
 #if 0
 						ODS("S(%d), ", shortIdx);
@@ -346,13 +500,13 @@ void tessellation_tri_edge_integer(int OL[3], int IL, bool CW, void(*emitTriangl
 #endif
 					}
 					else {
-						emitTriangle(pShort[shortIdx], pShort[shortIdx + 1], pLong[i]);
+						emitTriangle(tri_patch, pShort[shortIdx], pShort[shortIdx + 1], pLong[i]);
 					}
 
 					shortIdx++;
 				}
 				if (order) {
-					emitTriangle(pLong[i], pLong[i + 1], pShort[shortIdx]);
+					emitTriangle(tri_patch, pLong[i], pLong[i + 1], pShort[shortIdx]);
 #if 0
 					ODS("L(%d), ", i);
 					ODS("L(%d), ", i + 1);
@@ -361,16 +515,16 @@ void tessellation_tri_edge_integer(int OL[3], int IL, bool CW, void(*emitTriangl
 #endif
 				}
 				else {
-					emitTriangle(pLong[i], pShort[shortIdx], pLong[i + 1]);
+					emitTriangle(tri_patch, pLong[i], pShort[shortIdx], pLong[i + 1]);
 				}
 			}
 
 			if (shortIdx != cntShort - 1) {
 				if (order) {
-					emitTriangle(pShort[shortIdx], pLong[nTris], pShort[shortIdx + 1]);
+					emitTriangle(tri_patch, pShort[shortIdx], pLong[nTris], pShort[shortIdx + 1]);
 				}
 				else {
-					emitTriangle(pShort[shortIdx], pShort[shortIdx + 1], pLong[nTris]);
+					emitTriangle(tri_patch, pShort[shortIdx], pShort[shortIdx + 1], pLong[nTris]);
 				}
 #if 0
 				ODS("S(%d), ", shortIdx);
@@ -398,10 +552,10 @@ void tessellation_tri_edge_integer(int OL[3], int IL, bool CW, void(*emitTriangl
 
 	if (lastVerticesCnt[0] != 1) {
 		if (CW) {
-			emitTriangle(lastVertices[0][0], lastVertices[2][0], lastVertices[1][0]);
+			emitTriangle(tri_patch, lastVertices[0][0], lastVertices[2][0], lastVertices[1][0]);
 		}
 		else {
-			emitTriangle(lastVertices[0][0], lastVertices[1][0], lastVertices[2][0]);
+			emitTriangle(tri_patch, lastVertices[0][0], lastVertices[1][0], lastVertices[2][0]);
 		}
 	}
 
