@@ -1,6 +1,7 @@
 # tessellation
 tessellation C++
 
+WANING: I just wrote this, not fully tested, may contain bugs :)
 
 1, this is C++ implementation of tessellation on CPU. <br>
 2, in source code, some classes/functions are not defined, but, it's easy to write your own. <br>
